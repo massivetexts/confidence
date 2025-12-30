@@ -25,33 +25,32 @@ DEFAULT_MAX_SCORE = 50
 DEFAULT_SYSTEM_MESSAGE = "You are a scoring assistant."
 
 
+def resolve_env_file(path: Optional[str]) -> Optional[str]:
+    if path:
+        return path
+    for candidate in (".env.local", ".env"):
+        if Path(candidate).exists():
+            return candidate
+    return None
+
+
 def load_env_file(path: str, *, override: bool = False) -> Dict[str, str]:
     """Load environment variables from a .env file."""
+    try:
+        from dotenv import dotenv_values, load_dotenv  # type: ignore
+    except Exception as e:  # pragma: no cover
+        raise SystemExit(
+            "Missing dependency: python-dotenv. Install with `pip install python-dotenv` "
+            "or `uv run --with python-dotenv ...`."
+        ) from e
+
     env_path = Path(path)
     if not env_path.exists():
         raise SystemExit(f"Env file not found: {path}")
 
-    updates: Dict[str, str] = {}
-    for raw in env_path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[len("export ") :].strip()
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-        if (value.startswith(""") and value.endswith(""")) or (
-            value.startswith("'") and value.endswith("'")
-        ):
-            value = value[1:-1]
-        if not override and key in os.environ:
-            continue
-        os.environ[key] = value
-        updates[key] = value
-    return updates
+    load_dotenv(env_path, override=override)
+    values = dotenv_values(env_path)
+    return {key: value for key, value in values.items() if value is not None}
 
 
 def load_input_yaml(path: str) -> Dict[str, object]:
@@ -393,7 +392,10 @@ def main() -> None:
     common.add_argument("--prompt", help="Prompt for the default originality template.")
     common.add_argument("--response", help="Response to score.")
     common.add_argument("--input-yaml", help="Load task/item/response from YAML.")
-    common.add_argument("--env-file", help="Load API keys from a .env file.")
+    common.add_argument(
+        "--env-file",
+        help="Load API keys from a .env file (defaults to .env.local/.env if present).",
+    )
     common.add_argument(
         "--env-override",
         action="store_true",
@@ -445,8 +447,9 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    if args.env_file:
-        load_env_file(args.env_file, override=args.env_override)
+    env_path = resolve_env_file(args.env_file)
+    if env_path:
+        load_env_file(env_path, override=args.env_override)
 
     if args.input_yaml:
         yaml_data = load_input_yaml(args.input_yaml)

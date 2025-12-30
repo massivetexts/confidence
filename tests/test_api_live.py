@@ -13,7 +13,7 @@ def _require_api_env(*keys: str) -> None:
         pytest.skip("Set CONFIDENCE_RUN_API_TESTS=1 to enable live API tests.")
     missing = [key for key in keys if not os.getenv(key)]
     if missing:
-        pytest.skip(f"Missing API keys: {', '.join(missing)}")
+        pytest.skip("Missing API keys: " + ", ".join(missing))
 
 
 @pytest.mark.api

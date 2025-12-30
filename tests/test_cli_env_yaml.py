@@ -27,6 +27,20 @@ def test_load_env_file_override(tmp_path, monkeypatch):
     assert os.environ["OPENAI_API_KEY"] == "new-value"
 
 
+def test_resolve_env_file(tmp_path):
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        assert cli.resolve_env_file(None) is None
+        (tmp_path / ".env.local").write_text("A=1\n", encoding="utf-8")
+        assert cli.resolve_env_file(None) == ".env.local"
+        (tmp_path / ".env").write_text("B=2\n", encoding="utf-8")
+        assert cli.resolve_env_file(None) == ".env.local"
+        assert cli.resolve_env_file("custom.env") == "custom.env"
+    finally:
+        os.chdir(cwd)
+
+
 def test_load_input_yaml_mapping(tmp_path):
     yaml_file = tmp_path / "input.yaml"
     yaml_file.write_text(

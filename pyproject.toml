@@ -28,7 +28,8 @@ openai = ["openai>=1.0.0"]
 gemini = ["google-genai>=0.7.0"]
 hf = ["transformers>=4.40.0", "torch"]
 yaml = ["pyyaml>=6.0"]
-dev = ["pytest>=8.0.0", "pyyaml>=6.0"]
+dotenv = ["python-dotenv>=1.0.0"]
+dev = ["pytest>=8.0.0", "pyyaml>=6.0", "python-dotenv>=1.0.0"]
 
 [project.scripts]
 confidence-dropin = "confidence.cli:main"

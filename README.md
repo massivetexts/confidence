@@ -21,6 +21,7 @@ Optional extras:
 - `.[gemini]` for Gemini
 - `.[hf]` for Hugging Face
 - `.[yaml]` for YAML input
+- `.[dotenv]` for `.env` loading
 
 ## Quick start
 
@@ -89,7 +90,8 @@ confidence-dropin openai --input-yaml input.yaml
 
 ## .env support
 
-Create a `.env` file and load it explicitly:
+The CLI uses `python-dotenv` and will automatically load `.env.local` or `.env` if present.
+You can also point to a specific file.
 
 ```
 OPENAI_API_KEY=your-key
@@ -97,8 +99,12 @@ GEMINI_API_KEY=your-key
 ```
 
 ```bash
-confidence-dropin openai --env-file .env --task "Rate the humor from 10-50" --response "A pun" --divide-by-10
-confidence-dropin gemini --env-file .env --task "Rate the clarity from 10-50" --response "Clear." --divide-by-10
+confidence-dropin openai --task "Rate the humor from 10-50" --response "A pun" --divide-by-10
+confidence-dropin gemini --task "Rate the clarity from 10-50" --response "Clear." --divide-by-10
+```
+
+```bash
+confidence-dropin openai --env-file .env.local --task "Rate the humor from 10-50" --response "A pun" --divide-by-10
 ```
 
 ## Library usage
