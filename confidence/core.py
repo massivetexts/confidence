@@ -10,6 +10,7 @@ import math
 import os
 import re
 from dataclasses import dataclass
+from itertools import product
 from typing import Callable, Optional, Sequence, Union
 
 from .types import LogProbPair, ProbScores
@@ -34,6 +35,23 @@ def parse_first_number(text: str) -> Optional[float]:
 def _sorted_logprobs(score_logprobs: Sequence[LogProbPair]) -> list[LogProbPair]:
     # Many APIs already return top-k sorted, but we shouldn't rely on it.
     return sorted(score_logprobs, key=lambda x: x[1], reverse=True)
+
+
+def joint_score_logprobs(
+    token_logprobs: Sequence[Sequence[LogProbPair]],
+) -> list[LogProbPair]:
+    """Combine per-token top-k logprobs into joint score candidates."""
+    if len(token_logprobs) == 0:
+        raise ValueError("token_logprobs must be non-empty")
+    if len(token_logprobs) == 1:
+        return list(token_logprobs[0])
+
+    combos: list[LogProbPair] = []
+    for combo in product(*token_logprobs):
+        token = "".join(part for part, _ in combo)
+        logprob = sum(float(lp) for _, lp in combo)
+        combos.append((token, logprob))
+    return combos
 
 
 def probability_scores_from_logprobs(
@@ -104,6 +122,7 @@ class ConfidenceScoringResult:
     completion: str
     top_logprobs: list[LogProbPair]
     scores: ProbScores
+    token_logprobs: Optional[list[list[LogProbPair]]] = None
 
 
 def openai_chat_completion_top_logprobs(
@@ -118,7 +137,7 @@ def openai_chat_completion_top_logprobs(
     parse_score: ScoreParser = parse_first_number,
     score_transform: ScoreTransform = lambda x: x,
 ) -> ConfidenceScoringResult:
-    """Call OpenAI Chat Completions and return top-k logprobs for the 1st output token."""
+    """Call OpenAI Chat Completions and return top-k logprobs for the score tokens."""
     try:
         import openai  # type: ignore
     except Exception as e:  # pragma: no cover
@@ -143,16 +162,24 @@ def openai_chat_completion_top_logprobs(
             "No logprobs returned (model may not support logprobs or logprobs were disabled)"
         )
 
-    first_token = choice.logprobs.content[0]
-    if first_token.top_logprobs is None:
-        raise ValueError("No top_logprobs returned for first token")
+    token_logprobs: list[list[LogProbPair]] = []
+    for token_info in choice.logprobs.content[:max_tokens]:
+        if token_info.top_logprobs is None:
+            raise ValueError("No top_logprobs returned for a score token")
+        pairs = [(x.token, float(x.logprob)) for x in token_info.top_logprobs]
+        token_logprobs.append(pairs)
 
-    pairs = [(x.token, float(x.logprob)) for x in first_token.top_logprobs]
+    score_logprobs = joint_score_logprobs(token_logprobs)
     completion = choice.message.content or ""
     scores = probability_scores_from_logprobs(
-        pairs, parse_score=parse_score, score_transform=score_transform
+        score_logprobs, parse_score=parse_score, score_transform=score_transform
     )
-    return ConfidenceScoringResult(completion=completion, top_logprobs=pairs, scores=scores)
+    return ConfidenceScoringResult(
+        completion=completion,
+        top_logprobs=score_logprobs,
+        scores=scores,
+        token_logprobs=token_logprobs,
+    )
 
 
 def gemini_generate_content_top_logprobs(
@@ -167,7 +194,7 @@ def gemini_generate_content_top_logprobs(
     parse_score: ScoreParser = parse_first_number,
     score_transform: ScoreTransform = lambda x: x,
 ) -> ConfidenceScoringResult:
-    """Call Gemini (google-genai) and return top-k logprobs for the 1st output token."""
+    """Call Gemini (google-genai) and return top-k logprobs for the score tokens."""
     try:
         from google import genai  # type: ignore
         from google.genai import types  # type: ignore
@@ -204,22 +231,29 @@ def gemini_generate_content_top_logprobs(
     if len(cand.logprobs_result.top_candidates) == 0:
         raise ValueError("Empty logprobs_result.top_candidates from Gemini")
 
-    top0 = cand.logprobs_result.top_candidates[0]
-    if top0.candidates is None:
-        raise ValueError("Missing candidates in Gemini top_candidates[0]")
+    token_logprobs: list[list[LogProbPair]] = []
+    for top in cand.logprobs_result.top_candidates[:max_output_tokens]:
+        if top.candidates is None:
+            raise ValueError("Missing candidates in Gemini top_candidates")
+        pairs = [
+            (c.token, float(c.log_probability))
+            for c in top.candidates
+            if c.token is not None
+        ]
+        if len(pairs) == 0:
+            raise ValueError("No (token, log_probability) pairs returned from Gemini")
+        token_logprobs.append(pairs)
 
-    pairs = [
-        (c.token, float(c.log_probability))
-        for c in top0.candidates
-        if c.token is not None
-    ]
-    if len(pairs) == 0:
-        raise ValueError("No (token, log_probability) pairs returned from Gemini")
-
+    score_logprobs = joint_score_logprobs(token_logprobs)
     scores = probability_scores_from_logprobs(
-        pairs, parse_score=parse_score, score_transform=score_transform
+        score_logprobs, parse_score=parse_score, score_transform=score_transform
     )
-    return ConfidenceScoringResult(completion=completion, top_logprobs=pairs, scores=scores)
+    return ConfidenceScoringResult(
+        completion=completion,
+        top_logprobs=score_logprobs,
+        scores=scores,
+        token_logprobs=token_logprobs,
+    )
 
 
 def hf_next_token_top_logprobs(
@@ -228,11 +262,12 @@ def hf_next_token_top_logprobs(
     model,
     tokenizer,
     top_logprobs: int = 10,
+    score_tokens: int = 1,
     device: Optional[str] = None,
     parse_score: ScoreParser = parse_first_number,
     score_transform: ScoreTransform = lambda x: x,
 ) -> ConfidenceScoringResult:
-    """Compute next-token top-k logprobs for a HF causal LM (no generation required)."""
+    """Compute top-k logprobs for score tokens from a HF causal LM."""
     try:
         import torch  # type: ignore
     except Exception as e:  # pragma: no cover
@@ -246,24 +281,45 @@ def hf_next_token_top_logprobs(
     encoded = tokenizer(prompt, return_tensors="pt")
     encoded = {k: v.to(device) for k, v in encoded.items()}
 
-    with torch.no_grad():
-        out = model(**encoded)
-        logits = out.logits[0, -1]
-        logprobs = torch.log_softmax(logits, dim=-1)
-        topk = torch.topk(logprobs, k=top_logprobs)
+    token_logprobs: list[list[LogProbPair]] = []
+    completion_ids: list[int] = []
 
-    token_ids = topk.indices.tolist()
-    token_logprobs = topk.values.tolist()
-    pairs: list[LogProbPair] = []
-    for token_id, logprob in zip(token_ids, token_logprobs):
-        token = tokenizer.decode([token_id], clean_up_tokenization_spaces=False)
-        pairs.append((token, float(logprob)))
+    for _ in range(score_tokens):
+        with torch.no_grad():
+            out = model(**encoded)
+            logits = out.logits[0, -1]
+            logprobs = torch.log_softmax(logits, dim=-1)
+            topk = torch.topk(logprobs, k=top_logprobs)
 
-    completion = pairs[0][0] if pairs else ""
+        token_ids = topk.indices.tolist()
+        token_vals = topk.values.tolist()
+        pairs: list[LogProbPair] = []
+        for token_id, logprob in zip(token_ids, token_vals):
+            token = tokenizer.decode([token_id], clean_up_tokenization_spaces=False)
+            pairs.append((token, float(logprob)))
+        token_logprobs.append(pairs)
+
+        next_id = token_ids[0] if token_ids else None
+        if next_id is None:
+            break
+        completion_ids.append(next_id)
+        next_tensor = torch.tensor([[next_id]], device=device, dtype=encoded["input_ids"].dtype)
+        encoded["input_ids"] = torch.cat([encoded["input_ids"], next_tensor], dim=1)
+        if "attention_mask" in encoded:
+            next_mask = torch.ones((1, 1), device=device, dtype=encoded["attention_mask"].dtype)
+            encoded["attention_mask"] = torch.cat([encoded["attention_mask"], next_mask], dim=1)
+
+    score_logprobs = joint_score_logprobs(token_logprobs)
+    completion = tokenizer.decode(completion_ids, clean_up_tokenization_spaces=False)
     scores = probability_scores_from_logprobs(
-        pairs, parse_score=parse_score, score_transform=score_transform
+        score_logprobs, parse_score=parse_score, score_transform=score_transform
     )
-    return ConfidenceScoringResult(completion=completion, top_logprobs=pairs, scores=scores)
+    return ConfidenceScoringResult(
+        completion=completion,
+        top_logprobs=score_logprobs,
+        scores=scores,
+        token_logprobs=token_logprobs,
+    )
 
 
 def claude_logprobs_available() -> bool:

@@ -6,6 +6,7 @@ import pytest
 from confidence.core import (
     claude_logprobs_available,
     claude_top_logprobs_unavailable_error,
+    joint_score_logprobs,
     parse_first_number,
     probability_scores_from_logprobs,
     progressive_probability_scores_from_logprobs,
@@ -50,6 +51,16 @@ def test_progressive_probability_scores():
     assert len(scores) == 2
     assert scores[0]["n"] == 2
     assert scores[1]["n"] == 3
+
+
+def test_joint_score_logprobs():
+    token_logprobs = [
+        [(" 2", math.log(0.5)), (" 3", math.log(0.2))],
+        [("0", math.log(0.6)), ("5", math.log(0.4))],
+    ]
+    joint = joint_score_logprobs(token_logprobs)
+    expected_logprob = math.log(0.5) + math.log(0.6)
+    assert (" 20", pytest.approx(expected_logprob)) in joint
 
 
 def test_claude_logprobs_unavailable():

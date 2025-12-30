@@ -27,7 +27,7 @@ def test_openai_live():
             "role": "user",
             "content": (
                 "Rate the humor of the response from 10 to 50. "
-                "Return a single integer token.\n"
+                "Return only a number from 10 to 50.\n"
                 "RESPONSE: A silly joke.\n"
                 "SCORE:"
             ),
@@ -58,7 +58,7 @@ def test_gemini_live():
         model="gemini-2.0-flash",
         contents=(
             "Rate the clarity of the response from 10 to 50. "
-            "Return a single integer token.\n"
+            "Return only a number from 10 to 50.\n"
             "RESPONSE: This answer is clear.\n"
             "SCORE:"
         ),

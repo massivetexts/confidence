@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import os
+import sys
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
@@ -12,6 +14,7 @@ from .core import (
     claude_top_logprobs_unavailable_error,
     gemini_generate_content_top_logprobs,
     hf_next_token_top_logprobs,
+    joint_score_logprobs,
     openai_chat_completion_top_logprobs,
     parse_first_number,
     probability_scores_from_logprobs,
@@ -86,12 +89,48 @@ def apply_yaml_overrides(args: argparse.Namespace, data: Dict[str, object]) -> N
         args.score_divisor = data["score_divisor"]
     if not args.divide_by_10 and data.get("divide_by_10"):
         args.divide_by_10 = True
+    if args.score_tokens is None and "score_tokens" in data:
+        args.score_tokens = data["score_tokens"]
 
 
 def resolve_score_divisor(score_divisor: Optional[float], divide_by_10: bool) -> float:
     if score_divisor is None:
         return 10.0 if divide_by_10 else 1.0
     return float(score_divisor)
+
+
+def _auto_score_tokens(
+    *,
+    provider: str,
+    divide_by_10: bool,
+    score_divisor: float,
+) -> int:
+    if provider == "gemini" and (divide_by_10 or score_divisor == 10):
+        return 2
+    return 1
+
+
+def _resolve_score_tokens(args: argparse.Namespace) -> int:
+    raw = args.score_tokens
+    if raw is None:
+        return 1
+    if isinstance(raw, int):
+        tokens = raw
+    else:
+        raw_str = str(raw).strip().lower()
+        if raw_str == "auto":
+            return _auto_score_tokens(
+                provider=args.provider,
+                divide_by_10=args.divide_by_10,
+                score_divisor=resolve_score_divisor(args.score_divisor, args.divide_by_10),
+            )
+        try:
+            tokens = int(raw_str)
+        except ValueError as exc:
+            raise SystemExit("score-tokens must be 1-3 or 'auto'") from exc
+    if tokens < 1 or tokens > 3:
+        raise SystemExit("score-tokens must be 1-3 or 'auto'")
+    return tokens
 
 
 def normalize_args(args: argparse.Namespace) -> None:
@@ -111,7 +150,13 @@ def normalize_args(args: argparse.Namespace) -> None:
     if args.task is None and args.prompt is None and args.item is None:
         args.prompt = DEFAULT_PROMPT
 
+    if args.top_logprobs is None:
+        args.top_logprobs = 50 if args.provider == "hf" else 20
+    if args.provider in {"openai", "gemini"} and args.top_logprobs > 20:
+        raise SystemExit("top-logprobs must be <= 20 for OpenAI/Gemini.")
+
     args.score_divisor = resolve_score_divisor(args.score_divisor, args.divide_by_10)
+    args.score_tokens = _resolve_score_tokens(args)
 
 
 def _build_default_prompt(
@@ -123,8 +168,8 @@ def _build_default_prompt(
 ) -> str:
     return (
         "You are a creativity judge. Rate the originality of the RESPONSE for the PROMPT.\n"
-        f"Return a single token: an integer from {min_score} to {max_score}, "
-        f"where {min_score} is not original at all and {max_score} is extremely original.\n"
+        f"Return only a number from {min_score} to {max_score}, where {min_score} "
+        f"is not original at all and {max_score} is extremely original.\n"
         f"PROMPT: {prompt}\n"
         f"RESPONSE: {response}\n"
         "SCORE:"
@@ -140,9 +185,7 @@ def _build_task_prompt(
     max_score: int,
 ) -> str:
     lines = [task.strip()]
-    lines.append(
-        f"Return a single token: an integer from {min_score} to {max_score}."
-    )
+    lines.append(f"Return only a number from {min_score} to {max_score}.")
     if item:
         lines.append(f"ITEM: {item}")
     lines.append(f"RESPONSE: {response}")
@@ -210,54 +253,116 @@ def _mock_result(
     *,
     parse_score: Callable[[str], Optional[float]],
     divisor: float,
+    score_tokens: int,
 ) -> ConfidenceScoringResult:
-    # A tiny synthetic top-k distribution for the score token.
+    # A tiny synthetic top-k distribution for the score tokens.
     # The last candidate ("\n") is intentionally non-numeric so confidence < 1.0.
-    top_logprobs = [
-        (" 30", math.log(0.5)),
-        (" 40", math.log(0.2)),
-        (" 20", math.log(0.1)),
-        ("\n", math.log(0.2)),
-    ]
+    if score_tokens == 1:
+        token_logprobs = [
+            [
+                (" 30", math.log(0.5)),
+                (" 40", math.log(0.2)),
+                (" 20", math.log(0.1)),
+                ("\n", math.log(0.2)),
+            ]
+        ]
+    elif score_tokens == 2:
+        token_logprobs = [
+            [
+                (" 2", math.log(0.5)),
+                (" 3", math.log(0.2)),
+                (" 1", math.log(0.1)),
+                ("\n", math.log(0.2)),
+            ],
+            [
+                ("0", math.log(0.6)),
+                ("5", math.log(0.2)),
+                ("\n", math.log(0.2)),
+            ],
+        ]
+    else:
+        token_logprobs = [
+            [
+                (" 1", math.log(0.5)),
+                (" 2", math.log(0.2)),
+                (" 3", math.log(0.1)),
+                ("\n", math.log(0.2)),
+            ],
+            [
+                (".", math.log(0.7)),
+                (" ", math.log(0.3)),
+            ],
+            [
+                ("5", math.log(0.5)),
+                ("0", math.log(0.2)),
+                ("\n", math.log(0.3)),
+            ],
+        ]
+
+    score_logprobs = joint_score_logprobs(token_logprobs)
     scores = probability_scores_from_logprobs(
-        top_logprobs,
+        score_logprobs,
         parse_score=parse_score,
         score_transform=_transform_from_divisor(divisor),
     )
+    completion = "".join(parts[0][0] for parts in token_logprobs)
     return ConfidenceScoringResult(
-        completion=" 30",
-        top_logprobs=top_logprobs,
+        completion=completion,
+        top_logprobs=score_logprobs,
         scores=scores,
+        token_logprobs=token_logprobs,
     )
 
 
 def _print_result(
     result: ConfidenceScoringResult,
     *,
+    provider: str,
+    model: str,
+    prompt_text: str,
+    args: argparse.Namespace,
     parse_score: Callable[[str], Optional[float]],
     divisor: float,
     progressive: bool,
 ) -> None:
-    print("Raw completion:", repr(result.completion))
-    print("Scores:", result.scores)
+    payload: Dict[str, object] = {
+        "provider": provider,
+        "model": model,
+        "inputs": {
+            "task": args.task,
+            "item": args.item,
+            "prompt": args.prompt,
+            "response": args.response,
+            "prompt_text": prompt_text,
+            "min_score": args.min_score,
+            "max_score": args.max_score,
+            "score_divisor": args.score_divisor,
+            "divide_by_10": args.divide_by_10,
+            "score_tokens": args.score_tokens,
+            "top_logprobs": args.top_logprobs,
+            "device": getattr(args, "device", None),
+        },
+        "output": {
+            "completion": result.completion,
+            "scores": result.scores,
+        },
+    }
 
-    if not progressive:
-        return
+    if progressive:
+        filtered = [
+            (t, lp) for (t, lp) in result.top_logprobs if parse_score(t) is not None
+        ]
+        if len(filtered) >= 2:
+            payload["progressive"] = progressive_probability_scores_from_logprobs(
+                filtered,
+                parse_score=parse_score,
+                score_transform=_transform_from_divisor(divisor),
+                min_contributors=2,
+            )
+        else:
+            payload["progressive"] = []
 
-    filtered = [(t, lp) for (t, lp) in result.top_logprobs if parse_score(t) is not None]
-    if len(filtered) < 2:
-        print("Progressive weighted: <not enough score-like candidates>")
-        return
-
-    prog = progressive_probability_scores_from_logprobs(
-        filtered,
-        parse_score=parse_score,
-        score_transform=_transform_from_divisor(divisor),
-        min_contributors=2,
-    )
-    print("Progressive weighted (k=2..K):")
-    for i, scores in enumerate(prog, start=2):
-        print(f"  k={i}: {scores}")
+    print(json.dumps(payload))
 
 
 def run_openai(args: argparse.Namespace) -> None:
@@ -265,9 +370,17 @@ def run_openai(args: argparse.Namespace) -> None:
     prompt_text = resolve_prompt(args)
 
     if args.mock:
-        result = _mock_result(parse_score=parse_score, divisor=args.score_divisor)
+        result = _mock_result(
+            parse_score=parse_score,
+            divisor=args.score_divisor,
+            score_tokens=args.score_tokens,
+        )
         _print_result(
             result,
+            provider=args.provider,
+            model=args.model,
+            prompt_text=prompt_text,
+            args=args,
             parse_score=parse_score,
             divisor=args.score_divisor,
             progressive=args.progressive,
@@ -288,7 +401,7 @@ def run_openai(args: argparse.Namespace) -> None:
         model=args.model,
         messages=messages,
         top_logprobs=args.top_logprobs,
-        max_tokens=1,
+        max_tokens=args.score_tokens,
         stop=None,
         api_key=api_key,
         parse_score=parse_score,
@@ -296,6 +409,10 @@ def run_openai(args: argparse.Namespace) -> None:
     )
     _print_result(
         result,
+        provider=args.provider,
+        model=args.model,
+        prompt_text=prompt_text,
+        args=args,
         parse_score=parse_score,
         divisor=args.score_divisor,
         progressive=args.progressive,
@@ -307,9 +424,17 @@ def run_gemini(args: argparse.Namespace) -> None:
     prompt_text = resolve_prompt(args)
 
     if args.mock:
-        result = _mock_result(parse_score=parse_score, divisor=args.score_divisor)
+        result = _mock_result(
+            parse_score=parse_score,
+            divisor=args.score_divisor,
+            score_tokens=args.score_tokens,
+        )
         _print_result(
             result,
+            provider=args.provider,
+            model=args.model,
+            prompt_text=prompt_text,
+            args=args,
             parse_score=parse_score,
             divisor=args.score_divisor,
             progressive=args.progressive,
@@ -322,18 +447,38 @@ def run_gemini(args: argparse.Namespace) -> None:
             "Missing GEMINI_API_KEY/GOOGLE_API_KEY (or pass --api-key). For a keyless demo, use --mock."
         )
 
-    result = gemini_generate_content_top_logprobs(
-        model=args.model,
-        contents=prompt_text,
-        top_logprobs=args.top_logprobs,
-        max_output_tokens=1,
-        stop_sequences=("\n",),
-        api_key=api_key,
-        parse_score=parse_score,
-        score_transform=_transform_from_divisor(args.score_divisor),
-    )
+    if args.score_tokens == 1 and args.divide_by_10:
+        print(
+            "Warning: Gemini uses one token per digit, so divide-by-10 does not yield a single "
+            "token. Use --score-tokens 2 or 3.",
+            file=sys.stderr,
+        )
+
+    try:
+        result = gemini_generate_content_top_logprobs(
+            model=args.model,
+            contents=prompt_text,
+            top_logprobs=args.top_logprobs,
+            max_output_tokens=args.score_tokens,
+            stop_sequences=("\n",),
+            api_key=api_key,
+            parse_score=parse_score,
+            score_transform=_transform_from_divisor(args.score_divisor),
+        )
+    except ValueError as exc:
+        msg = str(exc)
+        if args.score_tokens == 1 and "score-like candidates" in msg:
+            raise SystemExit(
+                "No score-like candidates found. Gemini splits numbers into multiple tokens; "
+                "try --score-tokens 2 or 3."
+            ) from exc
+        raise
     _print_result(
         result,
+        provider=args.provider,
+        model=args.model,
+        prompt_text=prompt_text,
+        args=args,
         parse_score=parse_score,
         divisor=args.score_divisor,
         progressive=args.progressive,
@@ -364,12 +509,17 @@ def run_hf(args: argparse.Namespace) -> None:
         model=model,
         tokenizer=tokenizer,
         top_logprobs=args.top_logprobs,
+        score_tokens=args.score_tokens,
         device=args.device,
         parse_score=parse_score,
         score_transform=_transform_from_divisor(args.score_divisor),
     )
     _print_result(
         result,
+        provider=args.provider,
+        model=args.model,
+        prompt_text=prompt_text,
+        args=args,
         parse_score=parse_score,
         divisor=args.score_divisor,
         progressive=args.progressive,
@@ -404,8 +554,14 @@ def main() -> None:
     common.add_argument(
         "--top-logprobs",
         type=int,
-        default=20,
-        help="Top-k candidates for the score token (OpenAI max is 20).",
+        default=None,
+        help="Top-k candidates for the score token (OpenAI/Gemini max is 20).",
+    )
+    common.add_argument(
+        "--score-tokens",
+        type=str,
+        default=None,
+        help="Number of score tokens to consider (1-3 or auto).",
     )
     common.add_argument("--min-score", type=int)
     common.add_argument("--max-score", type=int)
@@ -439,7 +595,6 @@ def main() -> None:
     p_hf = sub.add_parser("hf", parents=[common])
     p_hf.add_argument("--model", default="gpt2")
     p_hf.add_argument("--device", default="cpu")
-    p_hf.set_defaults(top_logprobs=50)
     p_hf.set_defaults(func=run_hf)
 
     p_claude = sub.add_parser("claude", parents=[common])

@@ -9,4 +9,4 @@
 - Add schema-based YAML/JSON input validation.
 - Provide prompt templates for common tasks (humor, clarity, empathy, relevance, toxicity, etc.).
 - Add calibration helpers (e.g., map model scores to human scale with isotonic regression).
-- Add tool to plot confidence vs. accuracy or error curves.
+- Add tool to plot confidence vs. accuracy or error curves. (i.e. allowing a column with 'truth' answers)

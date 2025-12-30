@@ -6,6 +6,7 @@ from confidence import cli
 
 def _base_args():
     return Namespace(
+        provider="openai",
         task=None,
         item=None,
         prompt=None,
@@ -14,6 +15,8 @@ def _base_args():
         max_score=None,
         score_divisor=None,
         divide_by_10=False,
+        top_logprobs=None,
+        score_tokens=None,
     )
 
 
@@ -68,3 +71,14 @@ def test_normalize_args_defaults():
     assert args.max_score == cli.DEFAULT_MAX_SCORE
     assert args.prompt == cli.DEFAULT_PROMPT
     assert args.response == cli.DEFAULT_RESPONSE
+    assert args.top_logprobs == 20
+    assert args.score_tokens == 1
+
+
+def test_score_tokens_auto_gemini_divide_by_10():
+    args = _base_args()
+    args.provider = "gemini"
+    args.divide_by_10 = True
+    args.score_tokens = "auto"
+    cli.normalize_args(args)
+    assert args.score_tokens == 2

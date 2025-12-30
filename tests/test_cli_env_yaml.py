@@ -61,6 +61,7 @@ def test_load_input_yaml_invalid(tmp_path):
 
 def test_apply_yaml_overrides():
     args = Namespace(
+        score_tokens=None,
         task=None,
         item=None,
         prompt=None,
@@ -77,6 +78,7 @@ def test_apply_yaml_overrides():
         "max_score": 25,
         "score_divisor": 10,
         "divide_by_10": True,
+        "score_tokens": 2,
     }
     cli.apply_yaml_overrides(args, data)
     assert args.task == "Rate humor"
@@ -85,3 +87,4 @@ def test_apply_yaml_overrides():
     assert args.max_score == 25
     assert args.score_divisor == 10
     assert args.divide_by_10 is True
+    assert args.score_tokens == 2
