@@ -4,6 +4,7 @@
 # requires-python = ">=3.9"
 # dependencies = [
 #   "python-dotenv",
+#   "confidence @ git+https://github.com/massivetexts/confidence",
 #   "openai>=1.0.0",
 #   "google-genai>=0.7.0",
 # ]
