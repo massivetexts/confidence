@@ -19,7 +19,7 @@ See `uv run` docs: https://docs.astral.sh/uv/reference/cli/#uv-run
 
 ```bash
 # Run directly from GitHub (no clone required):
-uv run https://raw.githubusercontent.com/massivetexts/confidence/main/examples/confidence_dropin.py openai --task "Rate the humor of the response from 10-50" --response "A punny joke" --divide-by-10
+uvx --from "git+https://github.com/massivetexts/confidence" confidence-dropin openai --task "Rate the humor of the response from 10-50" --response "A punny joke" --divide-by-10
 
 # Or run locally after cloning:
 uv run examples/confidence_dropin.py openai --task "Rate the humor of the response from 10-50" --response "A punny joke" --divide-by-10
