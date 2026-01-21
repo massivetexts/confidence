@@ -2,6 +2,11 @@
 
 Drop-in utilities for computing confidence-aware scores from token log probabilities.
 
+This is a demonstrative repo meant to be easy to read and reuse. If you want to
+replicate the approach in your own codebase, start with `confidence/core.py`
+(especially `openai_chat_completion_top_logprobs`, `gemini_generate_content_top_logprobs`,
+`hf_next_token_top_logprobs`, and the probability utilities).
+
 This repo provides:
 - Probability-weighted scores from top-k logprobs for the score token
 - Confidence scores (probability mass over valid score-like candidates)
@@ -13,6 +18,10 @@ This repo provides:
 See `uv run` docs: https://docs.astral.sh/uv/reference/cli/#uv-run
 
 ```bash
+# Run directly from GitHub (no clone required):
+uv run https://github.com/massivetexts/confidence/blob/main/examples/confidence_dropin.py openai --task "Rate the humor of the response from 10-50" --response "A punny joke" --divide-by-10
+
+# Or run locally after cloning:
 uv run examples/confidence_dropin.py openai --task "Rate the humor of the response from 10-50" --response "A punny joke" --divide-by-10
 uv run examples/confidence_dropin.py gemini --task "Rate the clarity of the response from 10-50" --response "It is clear." --divide-by-10 --score-tokens auto
 uv run --with transformers --with torch examples/confidence_dropin.py hf --model gpt2 --task "Rate the relevance of the response from 10-50" --item "Recycling" --response "Turn it into a planter" --divide-by-10
