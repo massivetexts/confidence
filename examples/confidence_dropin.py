@@ -14,6 +14,7 @@ Examples (real APIs):
   uv run examples/confidence_dropin.py openai --model gpt-4o-mini --task "Rate the humor of this message from 10-50" --response "A punny joke" --divide-by-10
   uv run examples/confidence_dropin.py gemini --model gemini-2.0-flash --task "Rate the clarity of the response from 10-50" --response "It is clear." --divide-by-10 --score-tokens auto
   uv run --with transformers --with torch examples/confidence_dropin.py hf --model gpt2 --task "Rate the relevance of the response from 10-50" --item "Recycling" --response "Turn it into a planter" --divide-by-10
+  uv run examples/confidence_dropin.py openai --model gpt-4o --task "You are judging alternate uses for a brick. Rate the creativity of this response from 10-50" --response "A pedestal for a guinea pig queen" --divide-by-10 
 
 Examples (no API keys required; deterministic mock distribution):
   uv run examples/confidence_dropin.py openai --mock --divide-by-10
