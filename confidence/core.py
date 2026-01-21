@@ -145,16 +145,22 @@ def openai_chat_completion_top_logprobs(
 
     client = openai.OpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
 
-    resp = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        stop=stop,
-        n=1,
-        logprobs=True,
-        top_logprobs=top_logprobs,
-    )
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stop=stop,
+            n=1,
+            logprobs=True,
+            top_logprobs=top_logprobs,
+        )
+    except Exception as exc:
+        if _openai_logprobs_unavailable_error_match(exc):
+            detail = _openai_error_detail(exc)
+            raise _openai_logprobs_unavailable_error(model=model, detail=detail) from exc
+        raise
 
     choice = resp.choices[0]
     if getattr(choice, "logprobs", None) is None or choice.logprobs.content is None:
@@ -180,6 +186,43 @@ def openai_chat_completion_top_logprobs(
         scores=scores,
         token_logprobs=token_logprobs,
     )
+
+
+def _openai_logprobs_unavailable_error_match(exc: Exception) -> bool:
+    message = str(exc).lower()
+    if "logprobs" not in message:
+        return False
+    return any(
+        phrase in message
+        for phrase in (
+            "not allowed",
+            "not supported",
+            "unsupported",
+            "does not support",
+            "doesn't support",
+        )
+    )
+
+
+def _openai_error_detail(exc: Exception) -> Optional[str]:
+    detail = str(exc).strip()
+    return detail or None
+
+
+def _openai_logprobs_unavailable_error(*, model: str, detail: Optional[str]) -> RuntimeError:
+    hint = (
+        "GPT-5 models (gpt-5, gpt-5-mini, gpt-5-nano) do not support logprobs via "
+        "chat.completions."
+    )
+    suggestion = (
+        "Try a gpt-4.1-x model instead (gpt-4.1, gpt-4.1-mini, gpt-4.1-nano) or "
+        "another logprobs-capable model."
+    )
+    if detail:
+        message = f"OpenAI rejected logprobs for model '{model}'. {detail}. {hint} {suggestion}"
+    else:
+        message = f"OpenAI rejected logprobs for model '{model}'. {hint} {suggestion}"
+    return RuntimeError(message)
 
 
 def gemini_generate_content_top_logprobs(
